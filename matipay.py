@@ -14,10 +14,12 @@ BASE_URL  = 'https://vendingapp.matipay.com'
 APP_ROOT  = '/smart-vending-webapp'
 
 telegramcmd = {
-    "oggi"       : "today",
-    "ieri"       : "yesterday",
-    "ultimi7gg"  : "last7",
-    "ultimi30gg" : "last30",
+    "oggi"         : "today",
+    "ieri"         : "yesterday",
+    "ultimi7gg"    : "last7",
+    "ultimi30gg"   : "last30",
+    "questomese"   : "thismonth",
+    "mescorso"     : "lastmonth",
 }
 
 ch_id = ''
@@ -40,6 +42,13 @@ def date_range(period):
         return today - datetime.timedelta(days=6), today
     elif period == 'last30':
         return today - datetime.timedelta(days=29), today
+    elif period == 'thismonth':
+        first = today.replace(day=1)
+        return first, today
+    elif period == 'lastmonth':
+        last = today.replace(day=1) - datetime.timedelta(days=1)
+        first = last.replace(day=1)
+        return first, last
     return today, today
 
 
@@ -139,6 +148,8 @@ def format_report(results, period, transaction_table='CASH'):
         'yesterday': 'Ieri',
         'last7'    : 'Ultimi 7 giorni',
         'last30'   : 'Ultimi 30 giorni',
+        'thismonth': 'Questo mese',
+        'lastmonth': 'Mese scorso',
     }.get(period, period)
 
     lines = ["Periodo: {}  |  Tipo: {}".format(label, transaction_table), ""]
@@ -176,10 +187,10 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
 
     query_list = ['oggi']
     now = datetime.datetime.now()
-    if end_of_month(now.date()):
-        query_list.append('ultimi30gg')
-    if now.weekday() == 6:
+    if now.weekday() == 6:           # Sunday
         query_list.append('ultimi7gg')
+    if end_of_month(now.date()):     # Last day of month
+        query_list.append('questomese')
 
     for key in query_list:
         period = telegramcmd[key]
@@ -191,10 +202,12 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
 class MatiPayBot:
     def __init__(self, tokenid):
         self.app = ApplicationBuilder().token(tokenid).build()
-        self.app.add_handler(CommandHandler("oggi",       cmdhandler))
-        self.app.add_handler(CommandHandler("ieri",       cmdhandler))
-        self.app.add_handler(CommandHandler("ultimi7gg",  cmdhandler))
-        self.app.add_handler(CommandHandler("ultimi30gg", cmdhandler))
+        self.app.add_handler(CommandHandler("oggi",        cmdhandler))
+        self.app.add_handler(CommandHandler("ieri",        cmdhandler))
+        self.app.add_handler(CommandHandler("ultimi7gg",   cmdhandler))
+        self.app.add_handler(CommandHandler("ultimi30gg",  cmdhandler))
+        self.app.add_handler(CommandHandler("questomese",  cmdhandler))
+        self.app.add_handler(CommandHandler("mescorso",    cmdhandler))
 
         self.app.job_queue.run_once(callback_once, when=5)
         self.app.run_polling()
@@ -205,7 +218,7 @@ def test():
     user, passwd, _ = getMatiPayCredentials()
     api = MatiPayAPI(user, passwd)
 
-    for period in ('today', 'yesterday', 'last7'):
+    for period in ('today', 'yesterday', 'last7', 'thismonth', 'lastmonth'):
         results = api.get_all_machines_total(period)
         print(format_report(results, period))
         print()
