@@ -67,17 +67,17 @@ class MatiPayAPI:
 
     def get_transactions(self, serial_number, pv_cod, date_from, date_to,
                          transaction_table='CASH'):
-        """Fetch all pages of transactions and return the raw list."""
-        params = {
-            'vmSerialNumber'    : serial_number,
-            'pvCod'             : pv_cod,
-            'transactionTable'  : transaction_table,
-            'transactionTimeMin': str(date_from) + ' 00:00:00',
-            'transactionTimeMax': str(date_to)   + ' 23:59:59',
-            'orderBy'           : 'TRANSACTION_TIME',
-            'orderType'         : 'DESC',
-            'page'              : 1,
-        }
+        """Fetch all pages of CASH transactions and return only PURCHASE (Acquisto) ones."""
+        params = [
+            ('vmSerialNumber',     serial_number),
+            ('pvCod',              pv_cod),
+            ('transactionTable',   transaction_table),
+            ('transactionTimeMin', str(date_from) + ' 00:00:00'),
+            ('transactionTimeMax', str(date_to)   + ' 23:59:59'),
+            ('orderBy',            'TRANSACTION_TIME'),
+            ('orderType',          'DESC'),
+            ('page',               1),
+        ]
         all_items = []
 
         while True:
@@ -91,39 +91,66 @@ class MatiPayAPI:
             items = data.get('list', [])
             all_items.extend(items)
 
-            total     = data.get('totalItems', 0)
-            page_size = data.get('pageSize', len(items)) or 1
-
+            total = data.get('totalItems', 0)
             if len(all_items) >= total or not items:
                 break
-            params['page'] += 1
+            params = [(k, v) for k, v in params if k != 'page']
+            params.append(('page', len(all_items) // (data.get('pageSize') or 20) + 1))
 
-        return all_items
+        # Filter client-side: keep only "Acquisto - cash" (transactionType == PURCHASE)
+        return [t for t in all_items if t.get('transactionType') == 'PURCHASE']
 
-    def get_daily_total(self, serial_number, pv_cod, period='today',
-                        transaction_table='CASH'):
+    def get_machines(self):
+        """Return list of all vending machines as dicts with vmSerialNumber and pvCod."""
+        all_items = []
+        page = 1
+        while True:
+            resp = self.session.get(
+                BASE_URL + APP_ROOT + '/vm/list',
+                params={'page': page, 'orderBy': 'VM_SERIAL_NUMBER', 'orderType': 'ASC'},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get('list', [])
+            all_items.extend(items)
+            if len(all_items) >= data.get('totalItems', 0) or not items:
+                break
+            page += 1
+        return [{'sn': m['vmSerialNumber'], 'pv': m['pvCod']} for m in all_items]
+
+    def get_daily_total(self, serial_number, pv_cod, period='today'):
         date_from, date_to = date_range(period)
-        transactions = self.get_transactions(
-            serial_number, pv_cod, date_from, date_to, transaction_table
-        )
+        transactions = self.get_transactions(serial_number, pv_cod, date_from, date_to)
         total = sum(float(t.get('amount', 0) or 0) for t in transactions)
         return round(total, 2), len(transactions)
 
+    def get_all_machines_total(self, period='today'):
+        """Return totals for every machine as a list of (sn, total, count)."""
+        results = []
+        for m in self.get_machines():
+            total, count = self.get_daily_total(m['sn'], m['pv'], period)
+            results.append((m['sn'], total, count))
+        return results
 
-def format_message(serial_number, period, total, count, transaction_table='CASH'):
+
+def format_report(results, period, transaction_table='CASH'):
     label = {
         'today'    : 'Oggi',
         'yesterday': 'Ieri',
         'last7'    : 'Ultimi 7 giorni',
         'last30'   : 'Ultimi 30 giorni',
     }.get(period, period)
-    return (
-        "Distributore: {}\n"
-        "Periodo: {}\n"
-        "Tipo: {}\n"
-        "Transazioni: {}\n"
-        "Totale: €{:.2f}"
-    ).format(serial_number, label, transaction_table, count, total)
+
+    lines = ["Periodo: {}  |  Tipo: {}".format(label, transaction_table), ""]
+    grand_total = 0.0
+    grand_count = 0
+    for sn, total, count in results:
+        lines.append("Matr. {}  →  {} transaz.  €{:.2f}".format(sn, count, total))
+        grand_total += total
+        grand_count += count
+    lines.append("")
+    lines.append("TOTALE  →  {} transaz.  €{:.2f}".format(grand_count, round(grand_total, 2)))
+    return "\n".join(lines)
 
 
 def end_of_month(dt):
@@ -138,8 +165,8 @@ async def cmdhandler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("Attendi, sto raccogliendo i dati...")
 
     api = MatiPayAPI(user, passwd)
-    total, count = api.get_daily_total('000001', '0001', period)
-    msg = format_message('000001', period, total, count)
+    results = api.get_all_machines_total(period)
+    msg = format_report(results, period)
     await update.message.reply_text(msg)
 
 
@@ -156,8 +183,8 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
 
     for key in query_list:
         period = telegramcmd[key]
-        total, count = api.get_daily_total('000001', '0001', period)
-        msg = format_message('000001', period, total, count)
+        results = api.get_all_machines_total(period)
+        msg = format_report(results, period)
         await context.bot.send_message(chat_id=ch_id, text=msg)
 
 
@@ -173,13 +200,14 @@ class MatiPayBot:
         self.app.run_polling()
 
 
+
 def test():
     user, passwd, _ = getMatiPayCredentials()
     api = MatiPayAPI(user, passwd)
 
     for period in ('today', 'yesterday', 'last7'):
-        total, count = api.get_daily_total('000001', '0001', period)
-        print(format_message('000001', period, total, count))
+        results = api.get_all_machines_total(period)
+        print(format_report(results, period))
         print()
 
 
