@@ -22,13 +22,21 @@ telegramcmd = {
     "mescorso"     : "lastmonth",
 }
 
-ch_id = ''
-
+def load_config():
+    with open(os.path.join(sys.path[0], JSON_FILE)) as f:
+        return json.load(f)
 
 def getMatiPayCredentials():
-    with open(os.path.join(sys.path[0], JSON_FILE)) as f:
-        conf = json.load(f)
+    conf = load_config()
     return conf['matipay']['user'], conf['matipay']['pass'], conf['matipay']['hostname']
+
+def getBotConfig():
+    conf = load_config()
+    return conf['matipay_bot_config']['token_id'], conf['matipay_bot_config']['channel_id']
+
+def getMachineNames():
+    conf = load_config()
+    return conf.get('matipay_machine_names', {})
 
 
 def date_range(period):
@@ -152,11 +160,13 @@ def format_report(results, period, transaction_table='CASH'):
         'lastmonth': 'Mese scorso',
     }.get(period, period)
 
+    names = getMachineNames()
     lines = ["Periodo: {}  |  Tipo: {}".format(label, transaction_table), ""]
     grand_total = 0.0
     grand_count = 0
     for sn, total, count in results:
-        lines.append("Matr. {}  →  {} transaz.  €{:.2f}".format(sn, count, total))
+        name = names.get(sn, sn)
+        lines.append("{}  →  {} transaz.  €{:.2f}".format(name, count, total))
         grand_total += total
         grand_count += count
     lines.append("")
@@ -173,15 +183,18 @@ async def cmdhandler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     period = telegramcmd[msginput]
 
     user, passwd, _ = getMatiPayCredentials()
+    _, channel_id = getBotConfig()
     await update.message.reply_text("Attendi, sto raccogliendo i dati...")
 
     api = MatiPayAPI(user, passwd)
     results = api.get_all_machines_total(period)
     msg = format_report(results, period)
     await update.message.reply_text(msg)
+    await context.bot.send_message(chat_id=channel_id, text=msg)
 
 
 async def callback_once(context: ContextTypes.DEFAULT_TYPE):
+    _, channel_id = getBotConfig()
     user, passwd, _ = getMatiPayCredentials()
     api = MatiPayAPI(user, passwd)
 
@@ -196,7 +209,7 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
         period = telegramcmd[key]
         results = api.get_all_machines_total(period)
         msg = format_report(results, period)
-        await context.bot.send_message(chat_id=ch_id, text=msg)
+        await context.bot.send_message(chat_id=channel_id, text=msg)
 
 
 class MatiPayBot:
@@ -224,5 +237,26 @@ def test():
         print()
 
 
+async def send_report():
+    token_id, channel_id = getBotConfig()
+    user, passwd, _ = getMatiPayCredentials()
+    api = MatiPayAPI(user, passwd)
+
+    periods = ['oggi', 'ieri', 'ultimi7gg']
+    now = datetime.datetime.now()
+    if end_of_month(now.date()):
+        periods.append('questomese')
+
+    from telegram import Bot
+    bot = Bot(token=token_id)
+    for key in periods:
+        period = telegramcmd[key]
+        results = api.get_all_machines_total(period)
+        msg = format_report(results, period)
+        print(msg)
+        await bot.send_message(chat_id=channel_id, text=msg)
+
+
 if __name__ == '__main__':
-    test()
+    import asyncio
+    asyncio.run(send_report())
