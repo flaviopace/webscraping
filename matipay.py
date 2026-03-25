@@ -170,18 +170,53 @@ class MatiPayAPI:
             page += 1
         return [{'sn': m['vmSerialNumber'], 'pv': m['pvCod']} for m in all_items]
 
+    def get_failed_transactions(self, serial_number, pv_cod, date_from, date_to):
+        """Fetch all CASH transactions and return only failed (DENIED/INVALID) ones."""
+        params = [
+            ('vmSerialNumber',     serial_number),
+            ('pvCod',              pv_cod),
+            ('transactionTable',   'CASH'),
+            ('transactionTimeMin', str(date_from) + ' 00:00:00'),
+            ('transactionTimeMax', str(date_to)   + ' 23:59:59'),
+            ('orderBy',            'TRANSACTION_TIME'),
+            ('orderType',          'DESC'),
+            ('page',               1),
+        ]
+        all_items = []
+        while True:
+            resp = self.session.get(
+                BASE_URL + APP_ROOT + '/vm-details/transactions/list',
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get('list', [])
+            all_items.extend(items)
+            total = data.get('totalItems', 0)
+            if len(all_items) >= total or not items:
+                break
+            params = [(k, v) for k, v in params if k != 'page']
+            params.append(('page', len(all_items) // (data.get('pageSize') or 20) + 1))
+        return [t for t in all_items if t.get('transactionStatus') in ('DENIED', 'INVALID', 'PENDING')]
+
     def get_daily_total(self, serial_number, pv_cod, period='today'):
         date_from, date_to = date_range(period)
         transactions = self.get_transactions(serial_number, pv_cod, date_from, date_to)
         total = sum(float(t.get('amount', 0) or 0) for t in transactions)
         return round(total, 2), len(transactions)
 
+    def get_failed_total(self, serial_number, pv_cod, period='today'):
+        date_from, date_to = date_range(period)
+        failed = self.get_failed_transactions(serial_number, pv_cod, date_from, date_to)
+        return len(failed)
+
     def get_all_machines_total(self, period='today'):
-        """Return totals for every machine as a list of (sn, total, count)."""
+        """Return totals for every machine as a list of (sn, total, count, failed)."""
         results = []
         for m in self.get_machines():
             total, count = self.get_daily_total(m['sn'], m['pv'], period)
-            results.append((m['sn'], total, count))
+            failed = self.get_failed_total(m['sn'], m['pv'], period)
+            results.append((m['sn'], total, count, failed))
         return results
 
     def get_daily_breakdown(self, days=7):
@@ -260,13 +295,17 @@ def format_report(results, period):
     names = getMachineNames()
     grand_total = 0.0
     grand_count = 0
+    grand_failed = 0
     machine_lines = []
-    for sn, total, count in results:
+    for sn, total, count, failed in results:
         name = names.get(sn, sn)
-        machine_lines.append('  {} — {} vendite — €{:.2f}'.format(name, count, total))
+        failed_str = '  ⚠️ {} fallite'.format(failed) if failed > 0 else ''
+        machine_lines.append('  {} — {} vendite — €{:.2f}{}'.format(name, count, total, failed_str))
         grand_total += total
         grand_count += count
+        grand_failed += failed
 
+    failed_total_str = '  |  ⚠️ {} fallite'.format(grand_failed) if grand_failed > 0 else ''
     lines = [
         '📊 {}  ({})'.format(label.upper(), date_str),
         '─' * 28,
@@ -274,7 +313,7 @@ def format_report(results, period):
     lines += machine_lines
     lines += [
         '─' * 28,
-        '💰 Totale: {} vendite — €{:.2f}'.format(grand_count, round(grand_total, 2)),
+        '💰 Totale: {} vendite — €{:.2f}{}'.format(grand_count, round(grand_total, 2), failed_total_str),
     ]
     return '\n'.join(lines)
 
