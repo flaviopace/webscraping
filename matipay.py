@@ -219,6 +219,22 @@ class MatiPayAPI:
             results.append((m['sn'], total, count, failed))
         return results
 
+    def get_week_over_week(self):
+        """Return {sn: (this_week_total, last_week_total)} for each machine."""
+        today = datetime.date.today()
+        this_week_from = today - datetime.timedelta(days=6)
+        last_week_from = today - datetime.timedelta(days=13)
+        last_week_to   = today - datetime.timedelta(days=7)
+        results = {}
+        for m in self.get_machines():
+            this_week = self.get_transactions(m['sn'], m['pv'], this_week_from, today)
+            last_week = self.get_transactions(m['sn'], m['pv'], last_week_from, last_week_to)
+            results[m['sn']] = (
+                round(sum(float(t.get('amount', 0) or 0) for t in this_week), 2),
+                round(sum(float(t.get('amount', 0) or 0) for t in last_week), 2),
+            )
+        return results
+
     def get_daily_breakdown(self, days=7):
         """Return {sn: [(date, total), ...]} for each machine over the last N days."""
         today = datetime.date.today()
@@ -318,6 +334,50 @@ def format_report(results, period):
     return '\n'.join(lines)
 
 
+def format_wow(wow):
+    """Format week-over-week comparison report."""
+    names = getMachineNames()
+    today = datetime.date.today()
+    this_from = (today - datetime.timedelta(days=6)).strftime('%d/%m')
+    last_from = (today - datetime.timedelta(days=13)).strftime('%d/%m')
+    last_to   = (today - datetime.timedelta(days=7)).strftime('%d/%m')
+
+    grand_this, grand_last = 0.0, 0.0
+    machine_lines = []
+    for sn, (this_week, last_week) in wow.items():
+        name = names.get(sn, sn)
+        if last_week > 0:
+            pct = (this_week - last_week) / last_week * 100
+            arrow = '📈' if pct >= 0 else '📉'
+            pct_str = '{} {:+.1f}%'.format(arrow, pct)
+        else:
+            pct_str = '➡️ n/d'
+        machine_lines.append('  {} — €{:.2f} vs €{:.2f}  {}'.format(
+            name, this_week, last_week, pct_str))
+        grand_this += this_week
+        grand_last += last_week
+
+    if grand_last > 0:
+        pct = (grand_this - grand_last) / grand_last * 100
+        arrow = '📈' if pct >= 0 else '📉'
+        total_pct = '{} {:+.1f}%'.format(arrow, pct)
+    else:
+        total_pct = '➡️ n/d'
+
+    lines = [
+        '🔁 SETTIMANA SU SETTIMANA',
+        '  Questa: {} – {}  |  Precedente: {} – {}'.format(
+            this_from, today.strftime('%d/%m'), last_from, last_to),
+        '─' * 28,
+    ]
+    lines += machine_lines
+    lines += [
+        '─' * 28,
+        '💰 Totale: €{:.2f} vs €{:.2f}  {}'.format(grand_this, grand_last, total_pct),
+    ]
+    return '\n'.join(lines)
+
+
 def end_of_month(dt):
     return (dt + datetime.timedelta(days=1)).month != dt.month
 
@@ -388,7 +448,8 @@ async def send_report():
 
     periods = ['oggi', 'ultimi7gg', 'ultimi30gg']
     now = datetime.datetime.now()
-    if end_of_month(now.date()):
+    is_end_of_month = end_of_month(now.date())
+    if is_end_of_month:
         periods.append('questomese')
 
     from telegram import Bot
@@ -402,6 +463,13 @@ async def send_report():
         msg = format_report(results, period)
         print(msg)
         messages.append(msg)
+        await bot.send_message(chat_id=channel_id, text=msg)
+
+    # Week over week — only on last day of month
+    if is_end_of_month:
+        wow = api.get_week_over_week()
+        msg = format_wow(wow)
+        print(msg)
         await bot.send_message(chat_id=channel_id, text=msg)
 
     # Build 7-day graph and send via Telegram + email
