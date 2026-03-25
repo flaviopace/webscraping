@@ -3,6 +3,10 @@ import sys
 import json
 import datetime
 import tempfile
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 import requests
 import matplotlib
 matplotlib.use('Agg')
@@ -42,6 +46,32 @@ def getBotConfig():
 def getMachineNames():
     conf = load_config()
     return conf.get('matipay_machine_names', {})
+
+def getEmailConfig():
+    conf = load_config()
+    c = conf['email_config']
+    return c['sender'], c['app_password'], c['recipients']
+
+
+def send_email(graph_path, text):
+    sender, app_password, recipients = getEmailConfig()
+    today = datetime.date.today().strftime('%d/%m/%Y')
+
+    msg = MIMEMultipart()
+    msg['From']    = sender
+    msg['To']      = ', '.join(recipients)
+    msg['Subject'] = 'Incasso distributori - {}'.format(today)
+
+    msg.attach(MIMEText(text, 'plain'))
+
+    with open(graph_path, 'rb') as f:
+        img = MIMEImage(f.read(), name='incasso_7gg.png')
+    msg.attach(img)
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(sender, app_password)
+        server.sendmail(sender, recipients, msg.as_string())
+    print('Email sent to', recipients)
 
 
 def date_range(period):
@@ -318,13 +348,18 @@ async def send_report():
     #     print(msg)
     #     await bot.send_message(chat_id=channel_id, text=msg)
 
-    # Send 7-day graph
+    # Build 7-day graph and send via Telegram + email
     breakdown = api.get_daily_breakdown(days=7)
     graph_path = build_graph(breakdown)
+    summary = '\n\n'.join(
+        format_report(api.get_all_machines_total(telegramcmd[k]), telegramcmd[k])
+        for k in ['oggi', 'ieri', 'ultimi7gg']
+    )
     try:
         with open(graph_path, 'rb') as f:
             await bot.send_photo(chat_id=channel_id, photo=f,
                                  caption='Incasso Cash - Ultimi 7 giorni')
+        send_email(graph_path, summary)
     finally:
         os.remove(graph_path)
 
