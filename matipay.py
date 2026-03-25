@@ -2,7 +2,12 @@ import os
 import sys
 import json
 import datetime
+import tempfile
 import requests
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram import constants as botconst
@@ -149,6 +154,61 @@ class MatiPayAPI:
             results.append((m['sn'], total, count))
         return results
 
+    def get_daily_breakdown(self, days=7):
+        """Return {sn: [(date, total), ...]} for each machine over the last N days."""
+        today = datetime.date.today()
+        machines = self.get_machines()
+        breakdown = {}
+        for m in machines:
+            daily = []
+            for i in range(days - 1, -1, -1):
+                day = today - datetime.timedelta(days=i)
+                transactions = self.get_transactions(m['sn'], m['pv'], day, day)
+                total = round(sum(float(t.get('amount', 0) or 0) for t in transactions), 2)
+                daily.append((day, total))
+            breakdown[m['sn']] = daily
+        return breakdown
+
+
+def build_graph(breakdown):
+    """Build a bar chart of daily cash flow per machine, return path to temp PNG file."""
+    names = getMachineNames()
+    days = [d for d, _ in next(iter(breakdown.values()))]
+    day_labels = [d.strftime('%d/%m') for d in days]
+
+    x = range(len(days))
+    width = 0.35
+    n = len(breakdown)
+    offsets = [i * width - (n - 1) * width / 2 for i in range(n)]
+
+    _, ax = plt.subplots(figsize=(10, 5))
+    colors = ['#2196F3', '#FF9800', '#4CAF50', '#E91E63']
+
+    for idx, (sn, daily) in enumerate(breakdown.items()):
+        totals = [t for _, t in daily]
+        bars = ax.bar([xi + offsets[idx] for xi in x], totals,
+                      width=width, label=names.get(sn, sn),
+                      color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.5,
+                        f'€{h:.0f}', ha='center', va='bottom', fontsize=8)
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(day_labels)
+    ax.set_ylabel('Incasso (€)')
+    ax.set_title('Incasso Cash - Ultimi 7 giorni')
+    ax.legend()
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    plt.tight_layout()
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+    plt.savefig(tmp.name, dpi=150)
+    plt.close()
+    return tmp.name
+
 
 def format_report(results, period, transaction_table='CASH'):
     label = {
@@ -249,12 +309,24 @@ async def send_report():
 
     from telegram import Bot
     bot = Bot(token=token_id)
-    for key in periods:
-        period = telegramcmd[key]
-        results = api.get_all_machines_total(period)
-        msg = format_report(results, period)
-        print(msg)
-        await bot.send_message(chat_id=channel_id, text=msg)
+
+    # Send text reports
+    # for key in periods:
+    #     period = telegramcmd[key]
+    #     results = api.get_all_machines_total(period)
+    #     msg = format_report(results, period)
+    #     print(msg)
+    #     await bot.send_message(chat_id=channel_id, text=msg)
+
+    # Send 7-day graph
+    breakdown = api.get_daily_breakdown(days=7)
+    graph_path = build_graph(breakdown)
+    try:
+        with open(graph_path, 'rb') as f:
+            await bot.send_photo(chat_id=channel_id, photo=f,
+                                 caption='Incasso Cash - Ultimi 7 giorni')
+    finally:
+        os.remove(graph_path)
 
 
 if __name__ == '__main__':
