@@ -347,7 +347,7 @@ async def send_report():
     user, passwd, _ = getMatiPayCredentials()
     api = MatiPayAPI(user, passwd)
 
-    periods = ['oggi', 'ieri', 'ultimi7gg']
+    periods = ['oggi', 'ultimi7gg', 'ultimi30gg']
     now = datetime.datetime.now()
     if end_of_month(now.date()):
         periods.append('questomese')
