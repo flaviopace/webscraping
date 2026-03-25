@@ -229,9 +229,10 @@ def build_graph(breakdown):
     ax.set_xticklabels(day_labels)
     ax.set_ylabel('Incasso (€)')
     ax.set_title('Incasso Cash - Ultimi 7 giorni')
-    ax.legend()
     ax.yaxis.grid(True, linestyle='--', alpha=0.5)
     ax.set_axisbelow(True)
+
+    ax.legend()
     plt.tight_layout()
 
     tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
@@ -240,7 +241,7 @@ def build_graph(breakdown):
     return tmp.name
 
 
-def format_report(results, period, transaction_table='CASH'):
+def format_report(results, period):
     label = {
         'today'    : 'Oggi',
         'yesterday': 'Ieri',
@@ -250,18 +251,32 @@ def format_report(results, period, transaction_table='CASH'):
         'lastmonth': 'Mese scorso',
     }.get(period, period)
 
+    date_from, date_to = date_range(period)
+    if date_from == date_to:
+        date_str = date_from.strftime('%d/%m/%Y')
+    else:
+        date_str = '{} – {}'.format(date_from.strftime('%d/%m'), date_to.strftime('%d/%m/%Y'))
+
     names = getMachineNames()
-    lines = ["Periodo: {}  |  Tipo: {}".format(label, transaction_table), ""]
     grand_total = 0.0
     grand_count = 0
+    machine_lines = []
     for sn, total, count in results:
         name = names.get(sn, sn)
-        lines.append("{}  →  {} transaz.  €{:.2f}".format(name, count, total))
+        machine_lines.append('  {} — {} vendite — €{:.2f}'.format(name, count, total))
         grand_total += total
         grand_count += count
-    lines.append("")
-    lines.append("TOTALE  →  {} transaz.  €{:.2f}".format(grand_count, round(grand_total, 2)))
-    return "\n".join(lines)
+
+    lines = [
+        '📊 {}  ({})'.format(label.upper(), date_str),
+        '─' * 28,
+    ]
+    lines += machine_lines
+    lines += [
+        '─' * 28,
+        '💰 Totale: {} vendite — €{:.2f}'.format(grand_count, round(grand_total, 2)),
+    ]
+    return '\n'.join(lines)
 
 
 def end_of_month(dt):
@@ -340,26 +355,25 @@ async def send_report():
     from telegram import Bot
     bot = Bot(token=token_id)
 
-    # Send text reports
-    # for key in periods:
-    #     period = telegramcmd[key]
-    #     results = api.get_all_machines_total(period)
-    #     msg = format_report(results, period)
-    #     print(msg)
-    #     await bot.send_message(chat_id=channel_id, text=msg)
+    # Send one text message per period
+    messages = []
+    for key in periods:
+        period = telegramcmd[key]
+        results = api.get_all_machines_total(period)
+        msg = format_report(results, period)
+        print(msg)
+        messages.append(msg)
+        await bot.send_message(chat_id=channel_id, text=msg)
 
     # Build 7-day graph and send via Telegram + email
     breakdown = api.get_daily_breakdown(days=7)
     graph_path = build_graph(breakdown)
-    summary = '\n\n'.join(
-        format_report(api.get_all_machines_total(telegramcmd[k]), telegramcmd[k])
-        for k in ['oggi', 'ieri', 'ultimi7gg']
-    )
+    email_body = '\n\n'.join(messages)
     try:
         with open(graph_path, 'rb') as f:
             await bot.send_photo(chat_id=channel_id, photo=f,
-                                 caption='Incasso Cash - Ultimi 7 giorni')
-        send_email(graph_path, summary)
+                                 caption='📈 Grafico incasso — Ultimi 7 giorni')
+        # send_email(graph_path, email_body)
     finally:
         os.remove(graph_path)
 
