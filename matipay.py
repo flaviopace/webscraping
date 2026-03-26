@@ -313,24 +313,32 @@ def format_report(results, period):
     grand_total = 0.0
     grand_count = 0
     grand_failed = 0
-    machine_lines = []
+    rows = []
     for sn, total, count, failed in results:
-        name = names.get(sn, sn)
-        failed_str = '  ⚠️ {} fallite'.format(failed) if failed > 0 else ''
-        machine_lines.append('  {} — {} vendite — €{:.2f}{}'.format(name, count, total, failed_str))
+        rows.append((names.get(sn, sn), count, total, failed))
         grand_total += total
         grand_count += count
         grand_failed += failed
 
-    failed_total_str = '  |  ⚠️ {} fallite'.format(grand_failed) if grand_failed > 0 else ''
+    # Dynamic column widths
+    col1 = max(len(r[0]) for r in rows) + 1
+    col1 = max(col1, len('Macchina'))
+    sep = '─' * (col1 + 22)
+
+    table  = '{:<{}} {:>7}  {:>9}  {}\n'.format('Macchina', col1, 'Vendite', 'Incasso', 'Errori')
+    table += sep + '\n'
+    for name, count, total, failed in rows:
+        err = '⚠️ {}'.format(failed) if failed > 0 else '  -'
+        table += '{:<{}} {:>7}  {:>9}  {}\n'.format(name, col1, count, '€{:.2f}'.format(total), err)
+    table += sep + '\n'
+    err_tot = '⚠️ {}'.format(grand_failed) if grand_failed > 0 else '  -'
+    table += '{:<{}} {:>7}  {:>9}  {}'.format('TOTALE', col1, grand_count, '€{:.2f}'.format(round(grand_total, 2)), err_tot)
+
     lines = [
         '📊 {}  ({})'.format(label.upper(), date_str),
-        '─' * 28,
-    ]
-    lines += machine_lines
-    lines += [
-        '─' * 28,
-        '💰 Totale: {} vendite — €{:.2f}{}'.format(grand_count, round(grand_total, 2), failed_total_str),
+        '```',
+        table,
+        '```',
     ]
     return '\n'.join(lines)
 
@@ -344,37 +352,44 @@ def format_wow(wow):
     last_to   = (today - datetime.timedelta(days=7)).strftime('%d/%m')
 
     grand_this, grand_last = 0.0, 0.0
-    machine_lines = []
+    rows = []
     for sn, (this_week, last_week) in wow.items():
         name = names.get(sn, sn)
         if last_week > 0:
             pct = (this_week - last_week) / last_week * 100
-            arrow = '📈' if pct >= 0 else '📉'
-            pct_str = '{} {:+.1f}%'.format(arrow, pct)
+            trend = '{:+.1f}%'.format(pct)
         else:
-            pct_str = '➡️ n/d'
-        machine_lines.append('  {} — €{:.2f} vs €{:.2f}  {}'.format(
-            name, this_week, last_week, pct_str))
+            trend = 'n/d'
+        rows.append((name, this_week, last_week, trend))
         grand_this += this_week
         grand_last += last_week
 
     if grand_last > 0:
         pct = (grand_this - grand_last) / grand_last * 100
-        arrow = '📈' if pct >= 0 else '📉'
-        total_pct = '{} {:+.1f}%'.format(arrow, pct)
+        total_trend = '{:+.1f}%'.format(pct)
     else:
-        total_pct = '➡️ n/d'
+        total_trend = 'n/d'
+
+    col1 = max(len(r[0]) for r in rows) + 1
+    col1 = max(col1, len('Macchina'))
+    sep = '─' * (col1 + 26)
+
+    table  = '{:<{}} {:>8}  {:>8}  {:>7}\n'.format('Macchina', col1, 'Questa', 'Prec.', 'Var.')
+    table += sep + '\n'
+    for name, this_w, last_w, trend in rows:
+        table += '{:<{}} {:>8}  {:>8}  {:>7}\n'.format(
+            name, col1, '€{:.2f}'.format(this_w), '€{:.2f}'.format(last_w), trend)
+    table += sep + '\n'
+    table += '{:<{}} {:>8}  {:>8}  {:>7}'.format(
+        'TOTALE', col1, '€{:.2f}'.format(grand_this), '€{:.2f}'.format(grand_last), total_trend)
 
     lines = [
         '🔁 SETTIMANA SU SETTIMANA',
-        '  Questa: {} – {}  |  Precedente: {} – {}'.format(
+        'Questa: {} – {}   Prec: {} – {}'.format(
             this_from, today.strftime('%d/%m'), last_from, last_to),
-        '─' * 28,
-    ]
-    lines += machine_lines
-    lines += [
-        '─' * 28,
-        '💰 Totale: €{:.2f} vs €{:.2f}  {}'.format(grand_this, grand_last, total_pct),
+        '```',
+        table,
+        '```',
     ]
     return '\n'.join(lines)
 
