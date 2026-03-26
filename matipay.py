@@ -255,7 +255,8 @@ def build_graph(breakdown):
     """Build a bar chart of daily cash flow per machine, return path to temp PNG file."""
     names = getMachineNames()
     days = [d for d, _ in next(iter(breakdown.values()))]
-    day_labels = [d.strftime('%d/%m') for d in days]
+    it_days = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom']
+    day_labels = ['{}\n{}'.format(it_days[d.weekday()], d.strftime('%d/%m')) for d in days]
 
     x = range(len(days))
     width = 0.35
