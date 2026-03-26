@@ -210,6 +210,20 @@ class MatiPayAPI:
         failed = self.get_failed_transactions(serial_number, pv_cod, date_from, date_to)
         return len(failed)
 
+    def get_monthly_trend(self):
+        """Return monthly trend data from dashboard: {months: [...], qty: [...], amount: [...]}"""
+        resp = self.session.get(
+            BASE_URL + APP_ROOT + '/dashboard/get-graph',
+            params={'graphType': 'VEND_GRAPH'},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            'months': data['xAxis'],
+            'qty':    data['yAxis'][0],
+            'amount': data['yAxis'][1],
+        }
+
     def get_all_machines_total(self, period='today'):
         """Return totals for every machine as a list of (sn, total, count, failed)."""
         results = []
@@ -249,6 +263,47 @@ class MatiPayAPI:
                 daily.append((day, total))
             breakdown[m['sn']] = daily
         return breakdown
+
+
+def build_monthly_trend_graph(trend):
+    """Build a dual-axis bar+line chart of monthly sales trend, return path to temp PNG."""
+    months  = trend['months']
+    amounts = trend['amount']
+    qtys    = trend['qty']
+
+    x = range(len(months))
+    _, ax1 = plt.subplots(figsize=(10, 5))
+
+    bars = ax1.bar(x, amounts, color='#2196F3', alpha=0.85, label='Incasso (€)')
+    for bar, val in zip(bars, amounts):
+        if val > 0:
+            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                     '€{:.0f}'.format(val), ha='center', va='bottom', fontsize=9)
+
+    ax2 = ax1.twinx()
+    ax2.plot(list(x), qtys, color='#FF9800', marker='o', linewidth=2, label='Vendite (n)')
+    for xi, val in zip(x, qtys):
+        if val > 0:
+            ax2.text(xi, val + 0.3, '{:.0f}'.format(val),
+                     ha='center', va='bottom', fontsize=8, color='#FF9800')
+
+    ax1.set_xticks(list(x))
+    ax1.set_xticklabels(months)
+    ax1.set_ylabel('Incasso (€)', color='#2196F3')
+    ax2.set_ylabel('Vendite (n)', color='#FF9800')
+    ax1.set_title('Andamento mensile - Tutti i distributori')
+    ax1.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax1.set_axisbelow(True)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+
+    plt.tight_layout()
+    tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+    plt.savefig(tmp.name, dpi=150)
+    plt.close()
+    return tmp.name
 
 
 def build_graph(breakdown):
@@ -488,17 +543,27 @@ async def send_report():
         print(msg)
         await bot.send_message(chat_id=channel_id, text=msg)
 
-    # Build 7-day graph and send via Telegram + email
+    # 7-day graph
     breakdown = api.get_daily_breakdown(days=7)
-    graph_path = build_graph(breakdown)
-    email_body = '\n\n'.join(messages)
+    graph_7d = build_graph(breakdown)
     try:
-        with open(graph_path, 'rb') as f:
+        with open(graph_7d, 'rb') as f:
             await bot.send_photo(chat_id=channel_id, photo=f,
-                                 caption='📈 Grafico incasso — Ultimi 7 giorni')
-        # send_email(graph_path, email_body)
+                                 caption='📈 Incasso — Ultimi 7 giorni')
     finally:
-        os.remove(graph_path)
+        os.remove(graph_7d)
+
+    # Monthly trend graph — only on last day of month
+    if is_end_of_month:
+        trend = api.get_monthly_trend()
+        graph_trend = build_monthly_trend_graph(trend)
+        try:
+            with open(graph_trend, 'rb') as f:
+                await bot.send_photo(chat_id=channel_id, photo=f,
+                                     caption='📊 Andamento mensile')
+            # send_email(graph_trend, '\n\n'.join(messages))
+        finally:
+            os.remove(graph_trend)
 
 
 if __name__ == '__main__':
