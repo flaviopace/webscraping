@@ -264,6 +264,15 @@ class MatiPayAPI:
             breakdown[m['sn']] = daily
         return breakdown
 
+    def get_notifications(self):
+        """Fetch all notifications (faults, sold-out, credit, etc.)."""
+        resp = self.session.get(
+            BASE_URL + APP_ROOT + '/notifications/list',
+            params={'page': 1},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
 
 def build_monthly_trend_graph(trend):
     """Build a dual-axis bar+line chart of monthly sales trend, return path to temp PNG."""
@@ -449,8 +458,72 @@ def format_wow(wow):
     return '\n'.join(lines)
 
 
+NOTIF_LABELS = {
+    'fault':     '🔴 Guasti',
+    'soldOut':   '🟡 Sold-Out',
+    'credit':    '💳 Credito',
+    'take5':     '📦 Take5',
+    'news':      '📰 News',
+    'ecommerce': '🛒 E-commerce',
+    'ocs':       '☕ OCS',
+    'pagopa':    '🏛️ PagoPA',
+    'giftCard':  '🎁 Gift Card',
+}
+
+
+def format_notifications(data):
+    """Format notifications into a Telegram message."""
+    total_badge = sum(cat.get('badge', 0) for cat in data.values())
+
+    if total_badge == 0:
+        return '✅ ALLARMI E NOTIFICHE\n\nNessun allarme attivo. Tutto OK!'
+
+    lines = ['🚨 ALLARMI E NOTIFICHE\n']
+    for key, cat in data.items():
+        badge = cat.get('badge', 0)
+        notifications = cat.get('notifications', [])
+        if badge == 0:
+            continue
+
+        label = NOTIF_LABELS.get(key, key)
+        lines.append('{} ({})'.format(label, badge))
+        for n in notifications:
+            vm_sn = n.get('vmSerialNumber', '')
+            names = getMachineNames()
+            vm_name = names.get(vm_sn, vm_sn)
+            msg = n.get('message') or n.get('description') or n.get('text', '')
+            ts = n.get('time') or n.get('timestamp')
+            time_str = ''
+            if ts:
+                try:
+                    dt = datetime.datetime.fromtimestamp(ts / 1000)
+                    time_str = dt.strftime(' (%d/%m %H:%M)')
+                except Exception:
+                    pass
+            detail = '  • {}'.format(vm_name) if vm_name else '  •'
+            if msg:
+                detail += ': {}'.format(msg)
+            detail += time_str
+            lines.append(detail)
+        lines.append('')
+
+    return '\n'.join(lines)
+
+
 def end_of_month(dt):
     return (dt + datetime.timedelta(days=1)).month != dt.month
+
+
+async def cmd_allarmi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, passwd, _ = getMatiPayCredentials()
+    _, channel_id = getBotConfig()
+    await update.message.reply_text("Attendi, controllo allarmi...")
+
+    api = MatiPayAPI(user, passwd)
+    data = api.get_notifications()
+    msg = format_notifications(data)
+    await update.message.reply_text(msg)
+    await context.bot.send_message(chat_id=channel_id, text=msg)
 
 
 async def cmdhandler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -486,6 +559,11 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
         msg = format_report(results, period)
         await context.bot.send_message(chat_id=channel_id, text=msg)
 
+    # Send notifications/alarms
+    notif_data = api.get_notifications()
+    notif_msg = format_notifications(notif_data)
+    await context.bot.send_message(chat_id=channel_id, text=notif_msg)
+
 
 class MatiPayBot:
     def __init__(self, tokenid):
@@ -496,6 +574,7 @@ class MatiPayBot:
         self.app.add_handler(CommandHandler("ultimi30gg",  cmdhandler))
         self.app.add_handler(CommandHandler("questomese",  cmdhandler))
         self.app.add_handler(CommandHandler("mescorso",    cmdhandler))
+        self.app.add_handler(CommandHandler("allarmi",     cmd_allarmi))
 
         self.app.job_queue.run_once(callback_once, when=5)
         self.app.run_polling()
@@ -564,6 +643,12 @@ async def send_report():
             # send_email(graph_trend, '\n\n'.join(messages))
         finally:
             os.remove(graph_trend)
+
+    # Notifications / alarms
+    notif_data = api.get_notifications()
+    notif_msg = format_notifications(notif_data)
+    print(notif_msg)
+    await bot.send_message(chat_id=channel_id, text=notif_msg)
 
 
 if __name__ == '__main__':
