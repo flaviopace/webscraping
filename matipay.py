@@ -596,10 +596,11 @@ async def send_report():
     user, passwd, _ = getMatiPayCredentials()
     api = MatiPayAPI(user, passwd)
 
-    periods = ['oggi', 'ultimi7gg', 'ultimi30gg']
+    periods = ['oggi', 'ultimi7gg']
     now = datetime.datetime.now()
     is_end_of_month = end_of_month(now.date())
     if is_end_of_month:
+        periods.append('ultimi30gg')
         periods.append('questomese')
 
     from telegram import Bot
