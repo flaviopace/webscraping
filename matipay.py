@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import collections
 import datetime
 import tempfile
 import smtplib
@@ -264,6 +265,31 @@ class MatiPayAPI:
             breakdown[m['sn']] = daily
         return breakdown
 
+    def get_slot_and_hourly(self, period='last7'):
+        """Aggregate sales by physical slot (vmSelectionConverted) and by hour of day.
+
+        Returns (per_slot, per_hour):
+          per_slot[sn] = list of {slot, code, qty, revenue} sorted by qty desc
+          per_hour     = Counter {hour(0-23): n_sales} across all machines
+        """
+        date_from, date_to = date_range(period)
+        per_slot = {}
+        per_hour = collections.Counter()
+        for m in self.get_machines():
+            slots = {}
+            for t in self.get_transactions(m['sn'], m['pv'], date_from, date_to):
+                slot = str(t.get('vmSelectionConverted') or '?')
+                code = str(t.get('productCode') or '?')
+                row = slots.setdefault((slot, code), {
+                    'slot': slot, 'code': code, 'qty': 0, 'revenue': 0.0})
+                row['qty'] += 1
+                row['revenue'] += float(t.get('amount') or 0)
+                ts = t.get('transactionTime')
+                if ts:
+                    per_hour[datetime.datetime.fromtimestamp(ts / 1000).hour] += 1
+            per_slot[m['sn']] = sorted(slots.values(), key=lambda r: r['qty'], reverse=True)
+        return per_slot, per_hour
+
     def get_notifications(self):
         """Fetch all notifications (faults, sold-out, credit, etc.)."""
         resp = self.session.get(
@@ -458,6 +484,42 @@ def format_wow(wow):
     return '\n'.join(lines)
 
 
+def format_top_slots(per_slot, top=10):
+    """One Telegram message per machine: top selling slots (no product name)."""
+    names = getMachineNames()
+    blocks = []
+    for sn, rows in per_slot.items():
+        if not rows:
+            continue
+        lines = [
+            '🏷️ {} — Top {} spirali (7gg)'.format(names.get(sn, sn), top),
+            '```',
+            'Spira  Cod   Qta   Incasso',
+            '─' * 26,
+        ]
+        for r in rows[:top]:
+            lines.append('{:>4}  {:>5}  {:>3}x  €{:>6.2f}'.format(
+                r['slot'], r['code'], r['qty'], r['revenue']))
+        lines.append('```')
+        blocks.append('\n'.join(lines))
+    return blocks
+
+
+def format_hourly(per_hour):
+    """Telegram message with a bar chart of sales per hour of day."""
+    if not per_hour:
+        return None
+    peak = per_hour.most_common(1)[0][0]
+    mx = max(per_hour.values())
+    lines = ['🕐 Vendite per fascia oraria — 7gg (picco {:02d}:00)'.format(peak), '```']
+    for h in range(24):
+        n = per_hour.get(h, 0)
+        bar = '█' * round(n / mx * 20) if mx else ''
+        lines.append('{:02d}  {:<20} {}'.format(h, bar, n or ''))
+    lines.append('```')
+    return '\n'.join(lines)
+
+
 NOTIF_LABELS = {
     'fault':     '🔴 Guasti',
     'soldOut':   '🟡 Sold-Out',
@@ -604,6 +666,7 @@ async def send_report():
         periods.append('questomese')
 
     from telegram import Bot
+    from telegram.constants import ParseMode
     bot = Bot(token=token_id)
 
     # Send one text message per period
@@ -615,6 +678,19 @@ async def send_report():
         print(msg)
         messages.append(msg)
         await bot.send_message(chat_id=channel_id, text=msg)
+
+        # Weekly message only: top selling slots + hourly distribution
+        if key == 'ultimi7gg':
+            per_slot, per_hour = api.get_slot_and_hourly(period)
+            for block in format_top_slots(per_slot, top=10):
+                print(block)
+                await bot.send_message(chat_id=channel_id, text=block,
+                                       parse_mode=ParseMode.MARKDOWN)
+            hourly = format_hourly(per_hour)
+            if hourly:
+                print(hourly)
+                await bot.send_message(chat_id=channel_id, text=hourly,
+                                       parse_mode=ParseMode.MARKDOWN)
 
     # Week over week — only on last day of month
     if is_end_of_month:
