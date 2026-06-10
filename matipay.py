@@ -290,6 +290,39 @@ class MatiPayAPI:
             per_slot[m['sn']] = sorted(slots.values(), key=lambda r: r['qty'], reverse=True)
         return per_slot, per_hour
 
+    def get_vat_breakdown(self, period='lastmonth'):
+        """Sales split by VAT rate over a period (portal 'Dati di vendita' report).
+
+        Returns {'total': float, 'count': int, 'by_vat': {rate: amount}}.
+        Endpoint aggregates all machines, one row per day.
+        """
+        date_from, date_to = date_range(period)
+        rows = []
+        page = 1
+        while True:
+            resp = self.session.get(
+                BASE_URL + APP_ROOT + '/sales/simplified-layout/vat',
+                params={'from': str(date_from), 'to': str(date_to),
+                        'page': page, 'pageSize': 100},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get('list', [])
+            rows.extend(items)
+            if len(rows) >= data.get('totalItems', 0) or not items:
+                break
+            page += 1
+
+        total = 0.0
+        count = 0
+        by_vat = collections.Counter()
+        for row in rows:
+            total += row.get('totalAmount', 0) or 0
+            count += row.get('transactionCount', 0) or 0
+            for rate, amount in (row.get('salesByVatRate') or {}).items():
+                by_vat[rate] += amount or 0
+        return {'total': round(total, 2), 'count': count, 'by_vat': dict(by_vat)}
+
     def get_notifications(self):
         """Fetch all notifications (faults, sold-out, credit, etc.)."""
         resp = self.session.get(
@@ -477,6 +510,38 @@ def format_wow(wow):
         '🔁 SETTIMANA SU SETTIMANA',
         'Questa: {} – {}   Prec: {} – {}'.format(
             this_from, today.strftime('%d/%m'), last_from, last_to),
+        '```',
+        table,
+        '```',
+    ]
+    return '\n'.join(lines)
+
+
+def format_vat(vat, period):
+    """Format the VAT-rate sales breakdown into a Telegram message."""
+    label = {
+        'thismonth': 'Questo mese',
+        'lastmonth': 'Mese scorso',
+        'last30'   : 'Ultimi 30 giorni',
+    }.get(period, period)
+    date_from, date_to = date_range(period)
+    date_str = '{} – {}'.format(date_from.strftime('%d/%m'), date_to.strftime('%d/%m/%Y'))
+
+    by_vat = vat['by_vat']
+    col1 = max([len('Aliquota')] + [len('IVA {}%'.format(r)) for r in by_vat]) + 1
+    sep = '─' * (col1 + 12)
+
+    table  = '{:<{}} {:>10}\n'.format('Aliquota', col1, 'Incasso')
+    table += sep + '\n'
+    for rate in sorted(by_vat, key=lambda r: int(r)):
+        table += '{:<{}} {:>10}\n'.format(
+            'IVA {}%'.format(rate), col1, '€{:.2f}'.format(round(by_vat[rate], 2)))
+    table += sep + '\n'
+    table += '{:<{}} {:>10}'.format('TOTALE', col1, '€{:.2f}'.format(vat['total']))
+
+    lines = [
+        '🧾 INCASSO PER ALIQUOTA IVA  ({})'.format(date_str),
+        '{} · {} vendite'.format(label, vat['count']),
         '```',
         table,
         '```',
@@ -698,6 +763,13 @@ async def send_report():
         msg = format_wow(wow)
         print(msg)
         await bot.send_message(chat_id=channel_id, text=msg)
+
+        # VAT-rate breakdown for the month
+        vat = api.get_vat_breakdown('thismonth')
+        vat_msg = format_vat(vat, 'thismonth')
+        print(vat_msg)
+        await bot.send_message(chat_id=channel_id, text=vat_msg,
+                               parse_mode=ParseMode.MARKDOWN)
 
     # 7-day graph
     breakdown = api.get_daily_breakdown(days=7)
