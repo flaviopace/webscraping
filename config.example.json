@@ -1,0 +1,22 @@
+{
+     "cloud8816":
+  {
+           "hostname" : "https://your-cloud8816-hostname/login/",
+      "user"     : "your_username",
+      "pass" : "your_password"
+    },
+    "cloud8816_wowh24_config" :
+     {
+       "token_id": "YOUR_TELEGRAM_BOT_TOKEN",
+       "channel_id": "YOUR_TELEGRAM_CHANNEL_ID"
+  },
+  "matipay": {
+    "hostname": "https://vendingapp.matipay.com/smart-vending-webapp/login",
+    "user": "your_username",
+    "pass": "your_password"
+  },
+  "matipay_bot_config": {
+    "token_id": "YOUR_TELEGRAM_BOT_TOKEN",
+    "channel_id": "YOUR_TELEGRAM_CHANNEL_ID"
+  }
+}
