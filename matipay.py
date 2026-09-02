@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from bs4 import BeautifulSoup
 from telegram import Update
-from telegram import constants as botconst
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 
@@ -664,8 +664,9 @@ async def cmdhandler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     api = MatiPayAPI(user, passwd)
     results = api.get_all_machines_total(period)
     msg = format_report(results, period)
-    await update.message.reply_text(msg)
-    await context.bot.send_message(chat_id=channel_id, text=msg)
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await context.bot.send_message(chat_id=channel_id, text=msg,
+                                   parse_mode=ParseMode.MARKDOWN)
 
 
 async def callback_once(context: ContextTypes.DEFAULT_TYPE):
@@ -684,7 +685,8 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
         period = telegramcmd[key]
         results = api.get_all_machines_total(period)
         msg = format_report(results, period)
-        await context.bot.send_message(chat_id=channel_id, text=msg)
+        await context.bot.send_message(chat_id=channel_id, text=msg,
+                                       parse_mode=ParseMode.MARKDOWN)
 
     # Send notifications/alarms
     notif_data = api.get_notifications()
@@ -731,7 +733,6 @@ async def send_report():
         periods.append('questomese')
 
     from telegram import Bot
-    from telegram.constants import ParseMode
     bot = Bot(token=token_id)
 
     # Send one text message per period
@@ -742,7 +743,8 @@ async def send_report():
         msg = format_report(results, period)
         print(msg)
         messages.append(msg)
-        await bot.send_message(chat_id=channel_id, text=msg)
+        await bot.send_message(chat_id=channel_id, text=msg,
+                              parse_mode=ParseMode.MARKDOWN)
 
         # Weekly message only: top selling slots + hourly distribution
         if key == 'ultimi7gg':
