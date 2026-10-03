@@ -20,6 +20,7 @@ Un bot Python che effettua il login sul portale **MatiPay**, raccoglie le transa
 | 📈 **Grafico 7 giorni** | Incasso cash giornaliero per distributore |
 | 🗓️ **Andamento mensile** | Trend a valore e volume (a fine mese) |
 | 🔁 **Settimana su settimana** | Confronto con variazione percentuale |
+| ⚖️ **Vs settimana precedente** | La domenica: venduto, transazioni e scontrino medio con variazione % (ultimi 7 giorni completi, fino a ieri) |
 | 🏷️ **Top spirali** | Classifica per spirale (qta + incasso), nel report settimanale |
 | 🕐 **Fascia oraria** | Istogramma delle vendite per ora, con evidenza del picco |
 | 🧾 **Incasso per IVA** | Ripartizione fiscale per aliquota (10% / 22%), nel riepilogo di fine mese |

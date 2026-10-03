@@ -353,6 +353,27 @@ class MatiPayAPI:
         resp.raise_for_status()
         return {c['id']: c['value'] for c in resp.json()['data']['cards']}
 
+    def get_week_performance(self):
+        """Fleet KPIs for the last 7 full days vs the 7 days before (portal dashboard).
+
+        The portal only covers up to yesterday: a range ending today silently
+        leaves today's sales out, so the week ends yesterday.
+        Returns (date_from, date_to, {card_id: card}); card['value'] is already
+        formatted by the portal (e.g. '223,10 €') and card['trend'] is
+        {'direction': 'UP'|'DOWN'|'FLAT', 'delta': '21,08 %', ...} or None.
+        """
+        date_to = datetime.date.today() - datetime.timedelta(days=1)
+        date_from = date_to - datetime.timedelta(days=6)
+        resp = self.session.get(
+            BASE_URL + APP_ROOT + '/dashboard/performance',
+            params={'context': 'vending', 'periodPreset': '7d',
+                    'dateFrom': str(date_from), 'dateTo': str(date_to)},
+        )
+        resp.raise_for_status()
+        data = resp.json()['data']
+        cards = {c['id']: c for c in [data['revenue']] + data['cards']}
+        return date_from, date_to, cards
+
 
 def build_monthly_trend_graph(trend):
     """Build a dual-axis bar+line chart of monthly sales trend, return path to temp PNG."""
@@ -536,6 +557,56 @@ def format_wow(wow):
         '```',
     ]
     return '\n'.join(lines)
+
+
+PERF_LABELS = [
+    ('REVENUE',        'Venduto'),
+    ('TRANSACTIONS',   'Transazioni'),
+    ('AVERAGE_TICKET', 'Scontrino medio'),
+]
+
+
+def format_week_performance(date_from, date_to, cards):
+    """'vs previous week' block: revenue, transactions and average ticket."""
+    def trend(card):
+        t = card.get('trend') or {}
+        delta = (t.get('delta') or '').replace(' ', '')
+        if '%' not in delta:     # e.g. 'Variazione per il periodo non disponibile'
+            return 'n/d'
+        return {'UP': '+', 'DOWN': '-'}.get(t.get('direction'), '') + delta
+
+    rows = [(label, str(cards[cid].get('value') or '-'), trend(cards[cid]))
+            for cid, label in PERF_LABELS if cid in cards]
+    col1 = max(len(r[0]) for r in rows)
+    col2 = max(len(r[1]) for r in rows)
+    sep = '─' * (col1 + col2 + 12)
+
+    table = '\n'.join('{:<{}}  {:>{}}  {:>8}'.format(label, col1, value, col2, var)
+                      for label, value, var in rows)
+
+    prev_from = date_from - datetime.timedelta(days=7)
+    prev_to = date_to - datetime.timedelta(days=7)
+    lines = [
+        '⚖️ VS SETTIMANA PRECEDENTE',
+        'Questa: {} – {}   Prec: {} – {}'.format(
+            date_from.strftime('%d/%m'), date_to.strftime('%d/%m'),
+            prev_from.strftime('%d/%m'), prev_to.strftime('%d/%m')),
+        '```',
+        '{:<{}}  {:>{}}  {:>8}'.format('', col1, 'Valore', col2, 'Var.'),
+        sep,
+        table,
+        '```',
+    ]
+    return '\n'.join(lines)
+
+
+def build_week_performance_message(api):
+    """Weekly KPI block, or None if the (new, undocumented) endpoint fails."""
+    try:
+        return format_week_performance(*api.get_week_performance())
+    except Exception as e:
+        print('Weekly performance unavailable:', e)
+        return None
 
 
 def format_vat(vat, period):
@@ -734,6 +805,12 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=channel_id, text=msg,
                                        parse_mode=ParseMode.MARKDOWN)
 
+        if key == 'ultimi7gg':
+            perf = build_week_performance_message(api)
+            if perf:
+                await context.bot.send_message(chat_id=channel_id, text=perf,
+                                               parse_mode=ParseMode.MARKDOWN)
+
     # Send fleet status + notifications/alarms
     notif_msg = build_alarms_message(api)
     await context.bot.send_message(chat_id=channel_id, text=notif_msg)
@@ -793,6 +870,14 @@ async def send_report():
 
         # Weekly message only: top selling slots + hourly distribution
         if key == 'ultimi7gg':
+            # Sunday: KPIs vs the previous week
+            if now.weekday() == 6:
+                perf = build_week_performance_message(api)
+                if perf:
+                    print(perf)
+                    await bot.send_message(chat_id=channel_id, text=perf,
+                                           parse_mode=ParseMode.MARKDOWN)
+
             per_slot, per_hour = api.get_slot_and_hourly(period)
             for block in format_top_slots(per_slot, top=10):
                 print(block)
@@ -809,7 +894,8 @@ async def send_report():
         wow = api.get_week_over_week()
         msg = format_wow(wow)
         print(msg)
-        await bot.send_message(chat_id=channel_id, text=msg)
+        await bot.send_message(chat_id=channel_id, text=msg,
+                               parse_mode=ParseMode.MARKDOWN)
 
         # VAT-rate breakdown for the month
         vat = api.get_vat_breakdown('thismonth')
