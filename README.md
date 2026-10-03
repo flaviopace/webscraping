@@ -23,7 +23,7 @@ Un bot Python che effettua il login sul portale **MatiPay**, raccoglie le transa
 | 🏷️ **Top spirali** | Classifica per spirale (qta + incasso), nel report settimanale |
 | 🕐 **Fascia oraria** | Istogramma delle vendite per ora, con evidenza del picco |
 | 🧾 **Incasso per IVA** | Ripartizione fiscale per aliquota (10% / 22%), nel riepilogo di fine mese |
-| 🚨 **Allarmi** | Guasti, sold-out, credito e altre notifiche del portale |
+| 🚨 **Allarmi** | Stato distributori (operativi / offline / in allarme) + guasti, sold-out, credito e altre notifiche del portale |
 
 > Le statistiche per spirale e per ora sono calcolate dalle transazioni **già scaricate**: nessuna richiesta aggiuntiva al portale.
 
@@ -37,7 +37,7 @@ Un bot Python che effettua il login sul portale **MatiPay**, raccoglie le transa
 | `/ultimi30gg` | Ultimi 30 giorni |
 | `/questomese` | Mese corrente |
 | `/mescorso` | Mese precedente |
-| `/allarmi` | Allarmi e notifiche attive |
+| `/allarmi` | Stato distributori, allarmi e notifiche attive |
 
 ## 🚀 Avvio rapido
 

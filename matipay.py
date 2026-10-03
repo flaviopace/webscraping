@@ -332,6 +332,27 @@ class MatiPayAPI:
         resp.raise_for_status()
         return resp.json()
 
+    def get_realtime(self):
+        """Live fleet status from the portal dashboard (operational / offline / in alarm).
+
+        The endpoint echoes `totalActive` back in the OPERATIONAL card, so it is fed
+        the portal's own MHT_ACTIVE counter, exactly as the dashboard does.
+        Returns {card_id: value}, e.g. {'OPERATIONAL': '2/2', 'OFFLINE': '0', 'ALERT': '0'}.
+        """
+        resp = self.session.get(
+            BASE_URL + APP_ROOT + '/dashboard/statistic-multi-counter',
+            params={'counterType': 'MHT_ACTIVE'},
+        )
+        resp.raise_for_status()
+        total_active = resp.json()['data']['total']
+
+        resp = self.session.get(
+            BASE_URL + APP_ROOT + '/dashboard/realtime',
+            params={'context': 'vending', 'totalActive': total_active},
+        )
+        resp.raise_for_status()
+        return {c['id']: c['value'] for c in resp.json()['data']['cards']}
+
 
 def build_monthly_trend_graph(trend):
     """Build a dual-axis bar+line chart of monthly sales trend, return path to temp PNG."""
@@ -637,6 +658,32 @@ def format_notifications(data):
     return '\n'.join(lines)
 
 
+def format_realtime(status):
+    """Fleet status block; red when any machine is offline or in alarm."""
+    def count(card_id):
+        digits = ''.join(ch for ch in str(status.get(card_id) or '') if ch.isdigit())
+        return int(digits) if digits else 0
+
+    offline, alarm = count('OFFLINE'), count('ALERT')
+    icon = '🟢' if offline == 0 and alarm == 0 else '🔴'
+    return '{} STATO DISTRIBUTORI\n\nOperativi: {}\nOffline: {}\nIn allarme: {}'.format(
+        icon, status.get('OPERATIONAL') or '-', offline, alarm)
+
+
+def build_alarms_message(api):
+    """Fleet status followed by the portal notifications.
+
+    The realtime endpoint is new (portal 5.12) and undocumented: if it fails,
+    the notifications are still sent on their own.
+    """
+    msg = format_notifications(api.get_notifications())
+    try:
+        msg = format_realtime(api.get_realtime()) + '\n\n' + msg
+    except Exception as e:
+        print('Realtime status unavailable:', e)
+    return msg
+
+
 def end_of_month(dt):
     return (dt + datetime.timedelta(days=1)).month != dt.month
 
@@ -647,8 +694,7 @@ async def cmd_allarmi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("Attendi, controllo allarmi...")
 
     api = MatiPayAPI(user, passwd)
-    data = api.get_notifications()
-    msg = format_notifications(data)
+    msg = build_alarms_message(api)
     await update.message.reply_text(msg)
     await context.bot.send_message(chat_id=channel_id, text=msg)
 
@@ -688,9 +734,8 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=channel_id, text=msg,
                                        parse_mode=ParseMode.MARKDOWN)
 
-    # Send notifications/alarms
-    notif_data = api.get_notifications()
-    notif_msg = format_notifications(notif_data)
+    # Send fleet status + notifications/alarms
+    notif_msg = build_alarms_message(api)
     await context.bot.send_message(chat_id=channel_id, text=notif_msg)
 
 
@@ -795,9 +840,8 @@ async def send_report():
         finally:
             os.remove(graph_trend)
 
-    # Notifications / alarms
-    notif_data = api.get_notifications()
-    notif_msg = format_notifications(notif_data)
+    # Fleet status + notifications / alarms
+    notif_msg = build_alarms_message(api)
     print(notif_msg)
     await bot.send_message(chat_id=channel_id, text=notif_msg)
 
