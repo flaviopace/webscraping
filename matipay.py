@@ -678,81 +678,71 @@ def format_hourly(per_hour):
 
 
 NOTIF_LABELS = {
-    'fault':     '🔴 Guasti',
-    'soldOut':   '🟡 Sold-Out',
-    'credit':    '💳 Credito',
-    'take5':     '📦 Take5',
-    'news':      '📰 News',
-    'ecommerce': '🛒 E-commerce',
-    'ocs':       '☕ OCS',
-    'pagopa':    '🏛️ PagoPA',
-    'giftCard':  '🎁 Gift Card',
+    'fault':     'Guasti',
+    'soldOut':   'Sold-Out',
+    'credit':    'Credito',
+    'take5':     'Take5',
+    'news':      'News',
+    'ecommerce': 'E-commerce',
+    'ocs':       'OCS',
+    'pagopa':    'PagoPA',
+    'giftCard':  'Gift Card',
 }
 
 
-def format_notifications(data):
-    """Format notifications into a Telegram message."""
-    total_badge = sum(cat.get('badge', 0) for cat in data.values())
+def format_alarms(status, notifications):
+    """Minimal status: '🟢 Tutto OK', or one red line per problem.
 
-    if total_badge == 0:
-        return '✅ ALLARMI E NOTIFICHE\n\nNessun allarme attivo. Tutto OK!'
+    `status` is get_realtime()'s result, or None when it was unavailable.
+    """
+    problems = []
 
-    lines = ['🚨 ALLARMI E NOTIFICHE\n']
-    for key, cat in data.items():
+    if status is not None:
+        for card_id, label in (('OFFLINE', 'offline'), ('ALERT', 'in allarme')):
+            digits = ''.join(ch for ch in str(status.get(card_id) or '') if ch.isdigit())
+            if digits and int(digits):
+                problems.append('{} {}'.format(int(digits), label))
+
+    names = getMachineNames()
+    for key, cat in notifications.items():
         badge = cat.get('badge', 0)
-        notifications = cat.get('notifications', [])
-        if badge == 0:
+        if not badge:
             continue
-
         label = NOTIF_LABELS.get(key, key)
-        lines.append('{} ({})'.format(label, badge))
-        for n in notifications:
+        items = cat.get('notifications') or []
+        if not items:
+            problems.append('{} ({})'.format(label, badge))
+        for n in items:
             vm_sn = n.get('vmSerialNumber', '')
-            names = getMachineNames()
-            vm_name = names.get(vm_sn, vm_sn)
-            msg = n.get('message') or n.get('description') or n.get('text', '')
+            parts = [names.get(vm_sn, vm_sn)]
+            parts.append(n.get('message') or n.get('description') or n.get('text') or '')
             ts = n.get('time') or n.get('timestamp')
-            time_str = ''
             if ts:
                 try:
-                    dt = datetime.datetime.fromtimestamp(ts / 1000)
-                    time_str = dt.strftime(' (%d/%m %H:%M)')
+                    parts.append(datetime.datetime.fromtimestamp(ts / 1000).strftime('%d/%m %H:%M'))
                 except Exception:
                     pass
-            detail = '  • {}'.format(vm_name) if vm_name else '  •'
-            if msg:
-                detail += ': {}'.format(msg)
-            detail += time_str
-            lines.append(detail)
-        lines.append('')
+            problems.append('{}: {}'.format(label, ', '.join(p for p in parts if p)))
 
-    return '\n'.join(lines)
-
-
-def format_realtime(status):
-    """Fleet status block; red when any machine is offline or in alarm."""
-    def count(card_id):
-        digits = ''.join(ch for ch in str(status.get(card_id) or '') if ch.isdigit())
-        return int(digits) if digits else 0
-
-    offline, alarm = count('OFFLINE'), count('ALERT')
-    icon = '🟢' if offline == 0 and alarm == 0 else '🔴'
-    return '{} STATO DISTRIBUTORI\n\nOperativi: {}\nOffline: {}\nIn allarme: {}'.format(
-        icon, status.get('OPERATIONAL') or '-', offline, alarm)
+    if problems:
+        return '\n'.join('🔴 ' + p for p in problems)
+    if status is None:
+        return '🟢 Nessun allarme (stato distributori n/d)'
+    return '🟢 Tutto OK'
 
 
 def build_alarms_message(api):
-    """Fleet status followed by the portal notifications.
+    """Fleet status + portal notifications as one minimal message.
 
     The realtime endpoint is new (portal 5.12) and undocumented: if it fails,
-    the notifications are still sent on their own.
+    the message relies on the notifications alone and says so.
     """
-    msg = format_notifications(api.get_notifications())
     try:
-        msg = format_realtime(api.get_realtime()) + '\n\n' + msg
+        status = api.get_realtime()
     except Exception as e:
         print('Realtime status unavailable:', e)
-    return msg
+        status = None
+    return format_alarms(status, api.get_notifications())
 
 
 def end_of_month(dt):
