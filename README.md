@@ -23,7 +23,7 @@ Un bot Python che effettua il login sul portale **MatiPay**, raccoglie le transa
 | ⚖️ **Vs settimana precedente** | La domenica: venduto, transazioni e scontrino medio con variazione % (ultimi 7 giorni completi, fino a ieri) |
 | 🏷️ **Top spirali** | Classifica per spirale (qta + incasso), nel report settimanale |
 | 🕐 **Fascia oraria** | Istogramma delle vendite per ora, con evidenza del picco |
-| 🧾 **Incasso per IVA** | Ripartizione fiscale per aliquota (10% / 22%), nel riepilogo di fine mese |
+| 🧾 **Incasso per IVA** | Imponibile e IVA per aliquota (10% / 22%) più i prodotti senza aliquota, nel riepilogo di fine mese |
 | 🚨 **Allarmi** | Stato distributori (operativi / offline / in allarme) + guasti, sold-out, credito e altre notifiche del portale |
 
 > Le statistiche per spirale e per ora sono calcolate dalle transazioni **già scaricate**: nessuna richiesta aggiuntiva al portale.

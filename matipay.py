@@ -291,37 +291,36 @@ class MatiPayAPI:
         return per_slot, per_hour
 
     def get_vat_breakdown(self, period='lastmonth'):
-        """Sales split by VAT rate over a period (portal 'Dati di vendita' report).
+        """Sales split by VAT rate over a period, with taxable amount and VAT.
 
-        Returns {'total': float, 'count': int, 'by_vat': {rate: amount}}.
-        Endpoint aggregates all machines, one row per day.
+        Returns {'rows': [{'rate', 'taxable', 'vat', 'total'}], 'no_rate': float,
+                 'total': float, 'count': int}. 'no_rate' is the revenue from
+        products with no VAT rate set in the portal; 'total' includes it.
+
+        Computed from the transactions, which carry each product's VAT rate.
+        The portal's own sales reports are not usable here: the old one now
+        returns an empty body, and the new one leaves out the current day,
+        which the end-of-month report always includes.
         """
         date_from, date_to = date_range(period)
-        rows = []
-        page = 1
-        while True:
-            resp = self.session.get(
-                BASE_URL + APP_ROOT + '/sales/simplified-layout/vat',
-                params={'from': str(date_from), 'to': str(date_to),
-                        'page': page, 'pageSize': 100},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get('list', [])
-            rows.extend(items)
-            if len(rows) >= data.get('totalItems', 0) or not items:
-                break
-            page += 1
-
-        total = 0.0
+        by_rate = collections.Counter()
         count = 0
-        by_vat = collections.Counter()
-        for row in rows:
-            total += row.get('totalAmount', 0) or 0
-            count += row.get('transactionCount', 0) or 0
-            for rate, amount in (row.get('salesByVatRate') or {}).items():
-                by_vat[rate] += amount or 0
-        return {'total': round(total, 2), 'count': count, 'by_vat': dict(by_vat)}
+        for m in self.get_machines():
+            for t in self.get_transactions(m['sn'], m['pv'], date_from, date_to):
+                by_rate[t.get('productIva') or None] += float(t.get('amount') or 0)
+                count += 1
+
+        no_rate = round(by_rate.pop(None, 0.0), 2)
+        rows = []
+        for rate, total in by_rate.items():
+            total = round(total, 2)
+            taxable = round(total / (1 + float(rate) / 100), 2)
+            rows.append({'rate': '{:g}'.format(float(rate)), 'taxable': taxable,
+                         'vat': round(total - taxable, 2), 'total': total})
+        return {'rows': sorted(rows, key=lambda r: float(r['rate']), reverse=True),
+                'no_rate': no_rate,
+                'total': round(sum(r['total'] for r in rows) + no_rate, 2),
+                'count': count}
 
     def get_notifications(self):
         """Fetch all notifications (faults, sold-out, credit, etc.)."""
@@ -353,26 +352,27 @@ class MatiPayAPI:
         resp.raise_for_status()
         return {c['id']: c['value'] for c in resp.json()['data']['cards']}
 
-    def get_week_performance(self):
-        """Fleet KPIs for the last 7 full days vs the 7 days before (portal dashboard).
+    def get_fleet_sales(self, date_from, date_to):
+        """(revenue, sales count) of all machines over a date range."""
+        revenue, count = 0.0, 0
+        for m in self.get_machines():
+            transactions = self.get_transactions(m['sn'], m['pv'], date_from, date_to)
+            revenue += sum(float(t.get('amount', 0) or 0) for t in transactions)
+            count += len(transactions)
+        return round(revenue, 2), count
 
-        The portal only covers up to yesterday: a range ending today silently
-        leaves today's sales out, so the week ends yesterday.
-        Returns (date_from, date_to, {card_id: card}); card['value'] is already
-        formatted by the portal (e.g. '223,10 €') and card['trend'] is
-        {'direction': 'UP'|'DOWN'|'FLAT', 'delta': '21,08 %', ...} or None.
+    def get_week_performance(self):
+        """Sales of the last 7 full days and of the 7 days before.
+
+        The week ends yesterday so both weeks are complete (on Sunday: Sun–Sat).
+        Returns (date_from, date_to, this_week, prev_week); weeks are (revenue, count).
         """
         date_to = datetime.date.today() - datetime.timedelta(days=1)
         date_from = date_to - datetime.timedelta(days=6)
-        resp = self.session.get(
-            BASE_URL + APP_ROOT + '/dashboard/performance',
-            params={'context': 'vending', 'periodPreset': '7d',
-                    'dateFrom': str(date_from), 'dateTo': str(date_to)},
-        )
-        resp.raise_for_status()
-        data = resp.json()['data']
-        cards = {c['id']: c for c in [data['revenue']] + data['cards']}
-        return date_from, date_to, cards
+        week = datetime.timedelta(days=7)
+        return (date_from, date_to,
+                self.get_fleet_sales(date_from, date_to),
+                self.get_fleet_sales(date_from - week, date_to - week))
 
 
 def build_monthly_trend_graph(trend):
@@ -559,24 +559,25 @@ def format_wow(wow):
     return '\n'.join(lines)
 
 
-PERF_LABELS = [
-    ('REVENUE',        'Venduto'),
-    ('TRANSACTIONS',   'Transazioni'),
-    ('AVERAGE_TICKET', 'Scontrino medio'),
-]
-
-
-def format_week_performance(date_from, date_to, cards):
+def format_week_performance(date_from, date_to, this_week, prev_week):
     """'vs previous week' block: revenue, transactions and average ticket."""
-    def trend(card):
-        t = card.get('trend') or {}
-        delta = (t.get('delta') or '').replace(' ', '')
-        if '%' not in delta:     # e.g. 'Variazione per il periodo non disponibile'
-            return 'n/d'
-        return {'UP': '+', 'DOWN': '-'}.get(t.get('direction'), '') + delta
+    def ticket(week):
+        revenue, count = week
+        return revenue / count if count else 0.0
 
-    rows = [(label, str(cards[cid].get('value') or '-'), trend(cards[cid]))
-            for cid, label in PERF_LABELS if cid in cards]
+    def change(now, before):
+        if not before:
+            return 'n/d'
+        return '{:+.2f}%'.format((now - before) / before * 100).replace('.', ',')
+
+    def euro(amount):
+        return '{:,.2f}'.format(amount).replace(',', '_').replace('.', ',').replace('_', '.') + ' €'
+
+    rows = [
+        ('Venduto',         euro(this_week[0]),     change(this_week[0], prev_week[0])),
+        ('Transazioni',     str(this_week[1]),       change(this_week[1], prev_week[1])),
+        ('Scontrino medio', euro(ticket(this_week)), change(ticket(this_week), ticket(prev_week))),
+    ]
     col1 = max(len(r[0]) for r in rows)
     col2 = max(len(r[1]) for r in rows)
     sep = '─' * (col1 + col2 + 12)
@@ -600,15 +601,6 @@ def format_week_performance(date_from, date_to, cards):
     return '\n'.join(lines)
 
 
-def build_week_performance_message(api):
-    """Weekly KPI block, or None if the (new, undocumented) endpoint fails."""
-    try:
-        return format_week_performance(*api.get_week_performance())
-    except Exception as e:
-        print('Weekly performance unavailable:', e)
-        return None
-
-
 def format_vat(vat, period):
     """Format the VAT-rate sales breakdown into a Telegram message."""
     label = {
@@ -619,21 +611,25 @@ def format_vat(vat, period):
     date_from, date_to = date_range(period)
     date_str = '{} – {}'.format(date_from.strftime('%d/%m'), date_to.strftime('%d/%m/%Y'))
 
-    by_vat = vat['by_vat']
-    col1 = max([len('Aliquota')] + [len('IVA {}%'.format(r)) for r in by_vat]) + 1
-    sep = '─' * (col1 + 12)
+    def line(name, taxable, tax, total):
+        return '{:<9}{:>9}{:>9}{:>9}'.format(name, taxable, tax, total)
 
-    table  = '{:<{}} {:>10}\n'.format('Aliquota', col1, 'Incasso')
-    table += sep + '\n'
-    for rate in sorted(by_vat, key=lambda r: int(r)):
-        table += '{:<{}} {:>10}\n'.format(
-            'IVA {}%'.format(rate), col1, '€{:.2f}'.format(round(by_vat[rate], 2)))
-    table += sep + '\n'
-    table += '{:<{}} {:>10}'.format('TOTALE', col1, '€{:.2f}'.format(vat['total']))
+    sep = '─' * 36
+    table = [line('Aliquota', 'Imponib.', 'IVA', 'Totale'), sep]
+    for r in vat['rows']:
+        table.append(line('IVA {}%'.format(r['rate']), '{:.2f}'.format(r['taxable']),
+                          '{:.2f}'.format(r['vat']), '{:.2f}'.format(r['total'])))
+    if vat['no_rate']:
+        table.append(line('No aliq.', '-', '-', '{:.2f}'.format(vat['no_rate'])))
+    table.append(sep)
+    table.append(line('TOTALE', '{:.2f}'.format(sum(r['taxable'] for r in vat['rows'])),
+                      '{:.2f}'.format(sum(r['vat'] for r in vat['rows'])),
+                      '{:.2f}'.format(vat['total'])))
+    table = '\n'.join(table)
 
     lines = [
         '🧾 INCASSO PER ALIQUOTA IVA  ({})'.format(date_str),
-        '{} · {} vendite'.format(label, vat['count']),
+        '{} · {} vendite · importi in €'.format(label, vat['count']),
         '```',
         table,
         '```',
@@ -796,10 +792,9 @@ async def callback_once(context: ContextTypes.DEFAULT_TYPE):
                                        parse_mode=ParseMode.MARKDOWN)
 
         if key == 'ultimi7gg':
-            perf = build_week_performance_message(api)
-            if perf:
-                await context.bot.send_message(chat_id=channel_id, text=perf,
-                                               parse_mode=ParseMode.MARKDOWN)
+            perf = format_week_performance(*api.get_week_performance())
+            await context.bot.send_message(chat_id=channel_id, text=perf,
+                                           parse_mode=ParseMode.MARKDOWN)
 
     # Send fleet status + notifications/alarms
     notif_msg = build_alarms_message(api)
@@ -862,11 +857,10 @@ async def send_report():
         if key == 'ultimi7gg':
             # Sunday: KPIs vs the previous week
             if now.weekday() == 6:
-                perf = build_week_performance_message(api)
-                if perf:
-                    print(perf)
-                    await bot.send_message(chat_id=channel_id, text=perf,
-                                           parse_mode=ParseMode.MARKDOWN)
+                perf = format_week_performance(*api.get_week_performance())
+                print(perf)
+                await bot.send_message(chat_id=channel_id, text=perf,
+                                       parse_mode=ParseMode.MARKDOWN)
 
             per_slot, per_hour = api.get_slot_and_hourly(period)
             for block in format_top_slots(per_slot, top=10):
