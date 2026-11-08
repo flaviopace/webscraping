@@ -25,6 +25,7 @@ Un bot Python che effettua il login sul portale **MatiPay**, raccoglie le transa
 | 🕐 **Fascia oraria** | Istogramma delle vendite per ora, con evidenza del picco |
 | 🧾 **Incasso per IVA** | Imponibile e IVA per aliquota (10% / 22%) più i prodotti senza aliquota, nel riepilogo di fine mese |
 | 🚨 **Allarmi** | Stato distributori (operativi / offline / in allarme) + guasti, sold-out, credito e altre notifiche del portale |
+| 🔴 **Report interrotto** | Se il report non va a buon fine (password scaduta, portale irraggiungibile…) arriva un avviso sul canale |
 
 > Le statistiche per spirale e per ora sono calcolate dalle transazioni **già scaricate**: nessuna richiesta aggiuntiva al portale.
 

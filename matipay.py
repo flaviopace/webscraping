@@ -916,6 +916,35 @@ async def send_report():
     await bot.send_message(chat_id=channel_id, text=notif_msg)
 
 
+def format_failure(error):
+    """One-line alert for a report that could not be completed."""
+    status = getattr(getattr(error, 'response', None), 'status_code', None)
+    if status in (401, 403) or 'Login failed' in str(error):
+        # An expired password still "logs in", then every API call answers 403
+        return '🔴 Report interrotto: accesso al portale negato. Password scaduta?'
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return '🔴 Report interrotto: portale non raggiungibile'
+    return '🔴 Report interrotto: {}: {}'.format(type(error).__name__, str(error)[:150])
+
+
+async def send_failure_alert(error):
+    """Tell the channel the report failed; never raise, the cron log has the details."""
+    try:
+        from telegram import Bot
+        token_id, channel_id = getBotConfig()
+        await Bot(token=token_id).send_message(chat_id=channel_id, text=format_failure(error))
+    except Exception as e:
+        print('Failure alert not sent:', e)
+
+
+async def main():
+    try:
+        await send_report()
+    except Exception as e:
+        await send_failure_alert(e)
+        raise
+
+
 if __name__ == '__main__':
     import asyncio
-    asyncio.run(send_report())
+    asyncio.run(main())
