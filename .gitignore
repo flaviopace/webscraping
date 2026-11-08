@@ -1,2 +1,12 @@
-virtenv
+site_dump/
 config.json
+
+# Python virtualenv / caches
+virtenv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
